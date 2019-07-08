@@ -35,7 +35,7 @@ from tf2onnx.tfonnx import process_tf_graph
 logger = logging.getLogger("run_pretrained")
 
 TEMP_DIR = os.path.join(utils.get_temp_directory(), "run_pretrained")
-PERFITER = 1000
+PERFITER = 2
 
 
 def get_beach(shape):
