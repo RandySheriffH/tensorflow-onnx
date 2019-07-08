@@ -96,7 +96,7 @@ class Test(object):
         self.check_only_shape = check_only_shape
         self.perf = None
         self.tf_runtime = 0
-        self.onnx_runtime = 0
+        self.onnx_runtime = []
         self.model_type = model_type
         self.force_input_shape = force_input_shape
         self.skip_tensorflow = skip_tensorflow
@@ -179,7 +179,7 @@ class Test(object):
             start = time.time()
             for _ in range(PERFITER):
                 _ = m.run(self.output_names, inputs)
-            self.onnx_runtime = time.time() - start
+            self.onnx_runtime.append(time.time() - start)
         return results
 
     @staticmethod
@@ -252,6 +252,7 @@ class Test(object):
                 # convert model to onnx
                 onnx_graph = self.to_onnx(sess.graph, opset=opset, extra_opset=extra_opset,
                                           shape_override=shape_override, input_names=inputs.keys())
+                model_proto_un_opt = onnx_graph.make_model("converted from tf2onnx")
                 onnx_graph = optimizer.optimize_graph(onnx_graph)
                 model_proto = onnx_graph.make_model("converted from tf2onnx")
                 logger.info("To_ONNX, OK")
@@ -267,6 +268,7 @@ class Test(object):
                 onnx_results = self.run_caffe2(name, model_proto, inputs)
             elif backend == "onnxruntime":
                 onnx_results = self.run_onnxruntime(name, model_proto, inputs)
+                onnx_results_un_opt = self.run_onnxruntime(name + "_un_opt", model_proto_un_opt, inputs)
             else:
                 raise ValueError("unknown backend")
             logger.info("Run_ONNX OK")
@@ -469,7 +471,7 @@ def main():
             for test in test_keys:
                 t = tests[test]
                 if t.perf:
-                    f.write("{},{},{}\n".format(test, t.tf_runtime, t.onnx_runtime))
+                    f.write("{},{},{}\n".format(test, t.tf_runtime, t.onnx_runtime[::-1]))
                     if optimizer.opt_res is not None:
                         f.write(optimizer.opt_res)
     return failed
