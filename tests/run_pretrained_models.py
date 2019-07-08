@@ -470,6 +470,8 @@ def main():
                 t = tests[test]
                 if t.perf:
                     f.write("{},{},{}\n".format(test, t.tf_runtime, t.onnx_runtime))
+                    if optimizer.opt_res is not None:
+                        f.write(optimizer.opt_res)
     return failed
 
 

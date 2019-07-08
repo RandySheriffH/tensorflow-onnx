@@ -16,6 +16,7 @@ from .transpose_optimizer import TransposeOptimizer
 from .loop_optimizer import LoopOptimizer
 from .. import logging
 
+opt_res = None
 # optimizer sequence need to be considered carefully
 _optimizers = OrderedDict([
     ("optimize_transpose", TransposeOptimizer),
@@ -60,5 +61,9 @@ def optimize_graph(graph):
     diff = ["{} {} ({}->{})".format(k, str(v) if v < 0 else '+' + str(v), before.get(k, 0), after.get(k, 0))
             for k, v in sorted(diff.items()) if v != 0]
     logger.info("After optimization: %s", ', '.join(diff) if diff else "no change")
-
+    global opt_res
+    if diff:
+        opt_res = "After optimization: %s" % diff
+    else:
+        opt_res = "After optimization: no change"
     return graph
