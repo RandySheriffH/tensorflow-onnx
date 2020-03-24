@@ -1,2 +1,3 @@
+
 version = '1.6.0'
-git_version = '82f805f8fe7d2fa91e6ca9d39e153712f6887fec'
+git_version = '48fdca505baad401a0fc69332978ab9b5beeea3e'

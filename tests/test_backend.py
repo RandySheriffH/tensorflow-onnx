@@ -164,7 +164,7 @@ class BackendTests(Tf2OnnxBackendTestBase):
         kwargs["convert_var_to_const"] = False
         kwargs["constant_fold"] = False
         return self.run_test_case(func, feed_dict, [], output_names_with_port, **kwargs)
-
+    '''
     def _test_expand_dims_known_rank(self, idx):
         x_val = make_xval([3, 4])
         def func(x):
@@ -2585,7 +2585,27 @@ class BackendTests(Tf2OnnxBackendTestBase):
             res2 = tf.image.non_max_suppression(boxes, scores, max_output_size=0)
             return tf.identity(res1, name=_TFOUTPUT), tf.identity(res2, name=_TFOUTPUT1)
         self._run_test_case(func, [_OUTPUT, _OUTPUT1], {_INPUT: boxes_val, _INPUT1: scores_val})
+    '''
+    @check_opset_min_version(11, "NonMaxSuppressionV4")
+    def test_non_max_suppression(self):
+        box_num = 10
+        boxes_val = np.random.random_sample([box_num, 4]).astype(np.float32)
+        scores_val = np.random.random_sample([box_num]).astype(np.float32)
+        def func(boxes, scores):
+            ret1, ret2 = tf.image.non_max_suppression_padded(boxes, scores, max_output_size=int(box_num*2), pad_to_max_output_size=True)
+            return tf.identity(ret1, name=_TFOUTPUT), tf.identity(ret2, name=_TFOUTPUT1)
+        self._run_test_case(func, [_OUTPUT, _OUTPUT1], {_INPUT: boxes_val, _INPUT1: scores_val})
 
+    @check_opset_min_version(11, "NonMaxSuppressionV5")
+    def test_non_max_suppression(self):
+        box_num = 10
+        boxes_val = np.random.random_sample([box_num, 4]).astype(np.float32)
+        scores_val = np.random.random_sample([box_num]).astype(np.float32)
+        def func(boxes, scores):
+            ret1, ret2 = tf.image.non_max_suppression_with_scores(boxes, scores, max_output_size=int(box_num/2), soft_nms_sigma=0.0)
+            return tf.identity(ret1, name=_TFOUTPUT), tf.identity(ret2, name=_TFOUTPUT1)
+        self._run_test_case(func, [_OUTPUT, _OUTPUT1], {_INPUT: boxes_val, _INPUT1: scores_val})
+    '''
     def _conv1d_test(self, x_val, w, stride=None, padding="VALID", rtol=1e-07):
         if stride is None:
             stride = 1
@@ -2989,7 +3009,7 @@ class BackendTests(Tf2OnnxBackendTestBase):
             return tf.broadcast_to(input_tensor, new_shape, _TFOUTPUT)
 
         self._run_test_case(func, [_OUTPUT], {_INPUT: input_tensor_val, _INPUT1: new_shape_val})
-
+    '''
 
 if __name__ == '__main__':
     unittest_main()

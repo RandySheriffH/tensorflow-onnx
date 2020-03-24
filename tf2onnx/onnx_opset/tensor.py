@@ -1483,6 +1483,64 @@ class NonMaxSuppression:
         cls.version_10(ctx, node, **kwargs)
 
 
+@tf_op("NonMaxSuppressionV4", onnx_op="NonMaxSuppression")
+class NonMaxSuppression:
+    @classmethod
+    def version_11(cls, ctx, node, **kwargs):
+        ctx.insert_new_node_on_input(node, "Unsqueeze", node.input[0], axes=[0])
+        ctx.insert_new_node_on_input(node, "Unsqueeze", node.input[1], axes=[0, 1])
+        ctx.insert_new_node_on_input(node, "Cast", node.input[2], to=onnx_pb.TensorProto.INT64)
+        dtypes = [ctx.get_dtype(node.output[0])]
+        shapes = [ctx.get_shape(node.output[0])]
+        dtypes_1 = [ctx.get_dtype(node.output[1])]
+        shapes_1 = [ctx.get_shape(node.output[1])]
+        max_output_size = node.input[2]
+        ctx.remove_node(node.name)
+        new_nonmaxsurppress = ctx.make_node(node.type, node.input).output[0]
+        slice_op = GraphBuilder(ctx).make_slice({"data": new_nonmaxsurppress,
+                                                 "axes": [1], "ends": [3], "starts": [2]})
+        squeeze_op = ctx.make_node("Squeeze", [slice_op], attr={"axes": [1]})
+        if node.attr["pad_to_max_output_size"] == 0:
+            ctx.make_node("Cast", inputs=squeeze_op.output, attr={"to": onnx_pb.TensorProto.INT32},
+                          name=node.name, outputs=node.output, dtypes=dtypes, shapes=shapes)
+        else:
+            shape_op = ctx.make_node("Shape", inputs=[squeeze_op.output[0]])
+            const_zero = ctx.make_const(utils.make_name("const_zero"), np.array([0], dtype=np.int64))
+            sub_op = ctx.make_node("Sub", inputs=[max_output_size, shape_op.output[0]])
+            raw_pad = ctx.make_node("Concat", inputs=[const_zero.output[0], sub_op.output[0]], attr={'axis':0})
+            raw_pad_float = ctx.make_node("Cast", inputs=[raw_pad.output[0]], attr={"to": onnx_pb.TensorProto.FLOAT})
+            relu_op = ctx.make_node("Relu", inputs=[raw_pad_float.output[0]])
+            pad_val = ctx.make_node("Cast", inputs=[relu_op.output[0]], attr={"to": onnx_pb.TensorProto.INT64})
+            pad_op = ctx.make_node("Pad", inputs=[squeeze_op.output[0], pad_val.output[0]])
+            ctx.make_node("Cast", inputs=pad_op.output, name="cast_A", attr={"to": onnx_pb.TensorProto.INT32}, outputs=[node.output[0]], shapes=shapes)
+            reduce_op = ctx.make_node("ReduceSum", inputs=shape_op.output, attr={"axes":[0], "keepdims":0})
+            ctx.make_node("Cast", inputs=[reduce_op.output[0]], name="cast_B", attr={"to": onnx_pb.TensorProto.INT32}, outputs=[node.output[1]], shapes=shapes_1)
+        del node.attr["pad_to_max_output_size"]
+
+
+@tf_op("NonMaxSuppressionV5", onnx_op="NonMaxSuppression")
+class NonMaxSuppression:
+    @classmethod
+    def version_11(cls, ctx, node, **kwargs):
+        logger.warning("NonMaxSuppressionV5 only parltially supported, soft_nms_sigma must be 0.0")
+        ctx.insert_new_node_on_input(node, "Unsqueeze", node.input[0], axes=[0])
+        input_score = ctx.insert_new_node_on_input(node, "Unsqueeze", node.input[1], axes=[0, 1])
+        ctx.insert_new_node_on_input(node, "Cast", node.input[2], to=onnx_pb.TensorProto.INT64)
+        dtypes = [ctx.get_dtype(node.output[0])]
+        shapes = [ctx.get_shape(node.output[0])]
+        dtypes_1 = [ctx.get_dtype(node.output[1])]
+        shapes_1 = [ctx.get_shape(node.output[1])]
+        max_output_size = node.input[2]
+        ctx.remove_node(node.name)
+        new_nonmaxsurppress = ctx.make_node(node.type, node.input[:5]).output[0]
+        slice_op = GraphBuilder(ctx).make_slice({"data": new_nonmaxsurppress,
+                                                 "axes": [1], "ends": [3], "starts": [2]})
+        squeeze_op = ctx.make_node("Squeeze", [slice_op], attr={"axes": [1]})
+        ctx.make_node("Cast", inputs=squeeze_op.output, attr={"to": onnx_pb.TensorProto.INT32},
+                      name=node.name, outputs=[node.output[0]], dtypes=dtypes, shapes=shapes)
+        ctx.make_node("Gather", inputs=[input_score.input[0],squeeze_op.output[0]], outputs=[node.output[1]])
+
+
 @tf_op("ReverseSequence")
 class ReverseSequence:
     @classmethod
