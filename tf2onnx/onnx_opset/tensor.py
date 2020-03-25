@@ -1484,7 +1484,7 @@ class NonMaxSuppression:
 
 
 @tf_op("NonMaxSuppressionV4", onnx_op="NonMaxSuppression")
-class NonMaxSuppression:
+class NonMaxSuppressionV4:
     @classmethod
     def version_11(cls, ctx, node, **kwargs):
         ctx.insert_new_node_on_input(node, "Unsqueeze", node.input[0], axes=[0])
@@ -1519,7 +1519,7 @@ class NonMaxSuppression:
 
 
 @tf_op("NonMaxSuppressionV5", onnx_op="NonMaxSuppression")
-class NonMaxSuppression:
+class NonMaxSuppressionV5:
     @classmethod
     def version_11(cls, ctx, node, **kwargs):
         logger.warning("NonMaxSuppressionV5 only parltially supported, soft_nms_sigma must be 0.0")
@@ -1540,6 +1540,15 @@ class NonMaxSuppression:
                       name=node.name, outputs=[node.output[0]], dtypes=dtypes, shapes=shapes)
         ctx.make_node("Gather", inputs=[input_score.input[0],squeeze_op.output[0]], outputs=[node.output[1]])
 
+CombinedNonMaxSuppression
+@tf_op("CombinedNonMaxSuppression", onnx_op="NonMaxSuppression")
+class CombinedNonMaxSuppression:
+    @classmethod
+    def version_11(cls, ctx, node, **kwargs):
+        ctx.insert_new_node_on_input(node, "Squeeze", node.input[0], axes=[2])
+        ctx.insert_new_node_on_input(node, "Transpose", node.input[1], perm=[0,2,1])
+        ctx.remove_node(node.name)
+        new_nonmaxsurppress = ctx.make_node(node.type, node.input[:3]+[node.input[4], node.input[5]]).output[0]
 
 @tf_op("ReverseSequence")
 class ReverseSequence:
