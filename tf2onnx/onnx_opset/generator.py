@@ -39,7 +39,7 @@ class RandomOp:
         seed = node.get_attr("seed")
         node.set_attr("seed", float(seed.f))
         if len(node.input) > 0:
-            shape = node.inputs[0].get_tensor_value()
+            shape = [-1] #node.inputs[0].get_tensor_value()
             ctx.remove_input(node, node.input[0])
             node.set_attr("shape", shape)
             ctx.set_shape(node.output[0], shape)
