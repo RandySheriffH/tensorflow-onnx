@@ -15,6 +15,7 @@ import tensorflow as tf
 
 from tf2onnx import utils
 from tf2onnx.tf_utils import get_tf_version, tflist_to_onnx
+from tensorflow.contrib.seq2seq.python.ops import beam_search_ops
 
 logger = logging.getLogger(__name__)
 
