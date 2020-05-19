@@ -13,13 +13,18 @@ import logging
 import sys
 
 import numpy as np
+import tensorflow as tf
+from tensorflow.python.framework.convert_to_constants import convert_variables_to_constants_v2
+
 from onnx import onnx_pb
 from onnx.onnx_pb import TensorProto
 
-from tf2onnx import constants, utils
+from tf2onnx import constants, utils, tfonnx
 from tf2onnx.graph_builder import GraphBuilder
 from tf2onnx.handler import tf_op
 from tf2onnx.onnx_opset import nn, math
+from tf2onnx.tf_loader import tf_session,from_function
+#from tf2onnx.tfonnx import process_tf_graph
 
 logger = logging.getLogger(__name__)
 
@@ -282,6 +287,37 @@ class ConcatV2:
             _wrap_concat_with_cast(ctx, node)
             return
 
+    @classmethod
+    def version_11(cls, ctx, node, **kwargs):
+        # T output = ConcatV2(T values, Tidx axis, @int N, @type Tidx)
+        # T concat_result = Concat(T inputs, @INT axis)
+        # if any input is empty, remove the input and concat the others
+        # NOTE: workaround for https://github.com/Microsoft/onnxruntime/issues/681
+        node.type = "Concat"
+        for i, inp in enumerate(node.inputs):
+            if inp.is_const() and inp.get_tensor_value(as_list=False).size == 0:
+                ctx.remove_input(node, node.input[i])
+        # all inputs are deleted
+        if not node.input:
+            raise RuntimeError("all inputs of {} are empty".format(node.name))
+
+        axis_node = node.inputs[-1]
+        utils.make_sure(axis_node.is_const(), "{} needs to be const".format(axis_node.name))
+        axis_val = axis_node.get_tensor_value()
+        ctx.remove_input(node, node.input[-1])
+
+        '''
+        if axis_val < 0:  # onnxruntime does not support -1 axis, but TF supports.
+            input_shape = ctx.get_shape(node.input[0])
+            utils.make_sure(input_shape is not None, "shape of {} is None".format(node.input[0]))
+            axis_val = len(input_shape) + axis_val
+        '''
+        node.set_attr("axis", axis_val)
+
+        if ctx.opset < 8:
+            # opset < 8: might need to wrap concat in casts since only float is supported
+            _wrap_concat_with_cast(ctx, node)
+            return
 
 @tf_op("Slice")
 class Slice:
@@ -624,6 +660,25 @@ class ExpandDims:
             return
         raise ValueError("non-const dim is not supported")
 
+    @classmethod
+    def version_7(cls, ctx, node, **kwargs):
+        # T output = ExpandDims(T input, Tdim dim, @type Tdim), dim is 0-D scalar.
+        # T reshaped = Reshape-5(T data, int64 shape)
+        # T expanded = Unsqueeze-1(T data, @ints axes)
+        dim_node = node.inputs[1]
+        if dim_node.is_const():
+            node.type = "Unsqueeze"
+            dim = dim_node.get_tensor_value()
+            # TODO: isn't this always a list ?
+            if isinstance(dim, list):
+                dim = dim[0]
+            #if dim < 0:
+            #    input_rank = len(ctx.get_shape(node.input[0]))
+            #s    dim = dim + input_rank + 1
+            node.set_attr("axes", [dim])
+            ctx.remove_input(node, node.input[1])
+            return
+        raise ValueError("non-const dim is not supported")
 
 @tf_op("StridedSlice")
 class StridedSlice:
@@ -754,11 +809,13 @@ class StridedSlice:
         new_axis_mask = node.get_attr("new_axis_mask")
         new_axis_mask = new_axis_mask.i if new_axis_mask is not None else 0
 
+        '''
         if begin.is_const() and end.is_const() and strides.is_const() \
                 and all(val == 1 for val in strides.get_tensor_value()) \
                 and new_axis_mask == 0:
             cls.version_1(ctx, node, **kwargs)
             return
+        '''
 
         onnx_dtype = ctx.get_dtype(node.input[1])
         np_dtype = utils.ONNX_TO_NUMPY_DTYPE[onnx_dtype]
@@ -808,11 +865,14 @@ class StridedSlice:
         for idx in range(param_rank):
             if (ellipsis_mask >> idx) & 1:
                 input_shape = ctx.get_shape(input_x.output[0])
+                '''
                 utils.make_sure(
                     input_shape is not None,
                     "StridedSlice op {} requires the shape of input".format(node.name)
                 )
-                ellipsis_gap = len(input_shape) - param_rank
+                '''
+                # ellipsis_gap = 1 - param_rank if input_shape == None else len(input_shape) - param_rank 
+                ellipsis_gap = -param_rank
                 # handle the redundant param
                 new_begin_mask[idx] = 0
                 new_end_mask[idx] = max_size
@@ -916,6 +976,9 @@ class StridedSlice:
             np.array(axes, dtype=np_dtype)
         )
         axes_output = axes_const.output[0]
+
+        #print ("axes:", axes)
+        #input()
 
         inputs_map = {
             "data": input_x.output[0],
@@ -2034,6 +2097,167 @@ class MatrixDiagPartV2V3:
         squeeze_if.set_body_graph_as_attr("then_branch", squeeze_sliced_graph)
         squeeze_if.set_body_graph_as_attr("else_branch", identity_sliced_graph)
 
+
+@tf.function
+def MatrixDiagV3Func(diag, k, row, col, padding):
+    align = 'RIGHT_LEFT'
+    diag_shape = tf.shape(diag)
+    diag_width = diag_shape[-1]
+    const_neg_one = tf.constant(-1)
+    exp_const_neg_one = tf.expand_dims(const_neg_one, axis=-1)
+    const_zeo = tf.constant(0)
+    const_one = tf.constant(1)
+    const_two = tf.constant(2)
+    exp_const_two = tf.expand_dims(const_two, axis=-1)
+    k = tf.cast(k, dtype=const_zeo.dtype)
+    k_min = tf.reduce_min(k)
+    k_max = tf.reduce_max(k)
+    row = tf.cast(row, dtype=const_zeo.dtype)
+    col = tf.cast(col, dtype=const_zeo.dtype)
+    pad_shape = tf.concat([exp_const_neg_one, exp_const_two], axis=-1)
+    k_max_inc = tf.add(k_max, const_one)
+    k_count = tf.subtract(k_max_inc, k_min)
+    k_range = tf.range(k_min, k_max_inc)
+    k_range_abs = tf.math.abs(k_range)
+    superdiagonal_min = tf.math.maximum(const_zeo, k_min)
+    subdiagonal_max = tf.math.abs(tf.math.minimum(const_zeo, k_max))
+    k_to_zeo = tf.math.subtract(k_range_abs, const_zeo)
+    k_to_min = tf.reduce_min(k_to_zeo)
+    diag_len = tf.add(diag_width, k_to_min)
+    exp_len = tf.expand_dims(diag_len, axis=-1)
+    min_row = tf.add(diag_width, subdiagonal_max)
+    real_row = tf.cond(tf.logical_and(row == -1, col > -1), lambda: min_row, lambda: tf.math.maximum(diag_len, row))
+    exp_real_row = tf.expand_dims(real_row, axis=-1)
+    diag_min = tf.subtract(const_one, real_row)
+    min_col = tf.add(diag_width, superdiagonal_min)
+    real_col = tf.cond(tf.logical_and(row > -1, col == -1), lambda: min_col, lambda: tf.math.maximum(diag_len, col))
+    exp_real_col = tf.expand_dims(real_col, axis=-1)
+    min_diag_len = tf.math.minimum(real_row, real_col)
+    exp_min_diag_len = tf.expand_dims(min_diag_len, axis=-1)
+    k_iter_1 = tf.range(const_one, min_diag_len)
+    raw_diff = tf.math.subtract(real_row, real_col)
+    abs_diff = tf.math.abs(raw_diff)
+    inc_diff = tf.add(abs_diff, const_one)
+    exp_diff = tf.expand_dims(inc_diff, axis=-1)
+    k_iter_2 = tf.broadcast_to(exp_min_diag_len, exp_diff)
+    k_iter_3 = tf.reverse(k_iter_1, axis=[-1])
+    k_lens = tf.concat([k_iter_1, k_iter_2, k_iter_3], axis=-1) # all diag lens
+    diag_rank = tf.rank(diag)
+    diag_rank_greater = tf.greater(diag_rank, const_one)
+    diag = tf.cond(diag_rank_greater, lambda: diag, lambda: tf.expand_dims(diag, axis=0))
+    new_diag_shape = tf.shape(diag)
+    new_diag_depth = new_diag_shape[-2]
+    is_diag_equal = tf.equal(new_diag_depth, k_count)
+    diag = tf.cond(is_diag_equal, lambda: diag, lambda: tf.expand_dims(diag, axis=-2))
+    new_diag_shape = tf.shape(diag)
+    new_diag_depth = new_diag_shape[-2]
+    diag_shape = tf.shape(diag)
+    diag_width = diag_shape[-1]
+    exp_const_one = tf.expand_dims(const_one, axis=-1)
+    exp_diag_rank = tf.expand_dims(diag_rank, axis=-1)
+    diag_base = tf.broadcast_to(const_zeo, exp_diag_rank)
+    half_diag_base = diag_base[:-2]
+    half_diag_shape = diag_shape[:-2]
+    last_diag_shape = diag_shape[-1]
+    exp_last_diag_shape = tf.expand_dims(last_diag_shape, axis=-1)
+    exp_const_zeo = tf.expand_dims(const_zeo, axis=-1)
+    target_matrix_shape = tf.concat([half_diag_shape, exp_real_row, exp_real_col], axis=-1)
+    base_matrix = tf.zeros(target_matrix_shape)
+    base_matrix_casted = tf.cast(base_matrix, diag.dtype)
+    zero_padding = tf.cast(const_zeo, dtype=padding.dtype)
+    i = tf.constant(0)
+    superdiagonal_max = tf.subtract(real_col, const_one)
+    subdiagonal_min = tf.subtract(const_one, real_row)
+    def cond(k_iter, current_matrix):
+        return tf.math.greater_equal(k_iter, subdiagonal_min)
+    def body(k_iter, current_matrix):
+        k_index = tf.math.subtract(k_iter, diag_min)
+        k_index_inc = tf.add(k_index, const_one)
+        def GenerateDiag():
+            sliced_diag_shape = tf.concat([diag_shape[:-2], exp_const_one, k_lens[k_index:k_index_inc]], axis=-1)
+            return tf.broadcast_to(padding, sliced_diag_shape)
+        def SliceDiag():
+            i = tf.subtract(k_max, k_iter)
+            i_next = tf.add(i, const_one)
+            return diag[...,i:i_next,:]
+        current_diag = tf.cond(tf.logical_and(k_iter >= k_min, k_iter <= k_max), SliceDiag, GenerateDiag)
+        current_diag_shape = tf.shape(current_diag)
+        diag_width = current_diag_shape[-1]
+        current_k_len = k_lens[k_index]
+        should_trim = tf.greater(diag_width, current_k_len)
+        def trim_diag():
+            raw_trim_len = tf.subtract(current_k_len, diag_width)
+            abs_trim_len = tf.math.abs(raw_trim_len)
+            def trim_superdiagonal():
+                return current_diag[...,abs_trim_len:] if align.startswith('RIGHT') else current_diag[...,:raw_trim_len]
+            def trim_subdiagonal():
+                return current_diag[...,abs_trim_len:] if align.endswith('RIGHT') else current_diag[...,:raw_trim_len]
+            return tf.cond(k_iter < 0, trim_subdiagonal, trim_superdiagonal)
+        trimmed_diag = tf.cond(should_trim, trim_diag, lambda: current_diag)
+        trimmed_diag_shape = tf.shape(trimmed_diag)
+        trimmed_diag_width = trimmed_diag_shape[-1:]
+        last_half_trimmed_diag_shape = tf.concat([trimmed_diag_width, trimmed_diag_width], axis=-1)
+        target_trimmed_diag_shape = tf.concat([half_diag_shape, last_half_trimmed_diag_shape], axis=-1)
+        raw_target_ones = tf.ones(target_trimmed_diag_shape)
+        raw_target_padded = tf.math.multiply(raw_target_ones, 0)#current_padding)
+        raw_target_padded_casted = tf.cast(raw_target_padded, trimmed_diag.dtype)
+        raw_target_merged = tf.concat([trimmed_diag, raw_target_padded_casted], axis=-2)
+        raw_target_merged_shape = tf.shape(raw_target_merged)
+        first_raw_target_merged_shape = raw_target_merged_shape[:-2]
+        last_raw_target_merged_shape = raw_target_merged_shape[-2:]
+        temp_raw_target_merged_shape = tf.concat([exp_const_neg_one, last_raw_target_merged_shape], axis=-1)
+        reshaped_raw_target_merged = tf.reshape(raw_target_merged, temp_raw_target_merged_shape)
+        reshaped_raw_target_merged_width = temp_raw_target_merged_shape[-1]
+        range_to = tf.add(const_two, reshaped_raw_target_merged_width)
+        reverse_lens = tf.range(const_two, range_to)
+        reversed_target_merged = tf.reverse_sequence(reshaped_raw_target_merged, reverse_lens, seq_axis=1, batch_axis=2)
+        sliced_reversed_target_merged = reversed_target_merged[...,1:,:]
+        reshape_sliced_target = tf.reshape(sliced_reversed_target_merged, target_trimmed_diag_shape)
+        zeros_pad = tf.math.multiply(first_raw_target_merged_shape, const_zeo)
+        double_pad = tf.concat([zeros_pad, zeros_pad], axis=-1)
+        col_gap = tf.subtract(real_col, current_k_len)
+        left_col_gap = tf.math.maximum(const_zeo, k_iter)
+        exp_left_col_gap = tf.expand_dims(left_col_gap, axis=-1)
+        right_col_gap = tf.subtract(col_gap, left_col_gap)
+        exp_right_col_gap = tf.expand_dims(right_col_gap, axis=-1)
+        row_gap = tf.subtract(real_row, current_k_len)
+        top_row_gap = tf.math.abs(tf.math.minimum(const_zeo, k_iter))
+        exp_top_row_gap = tf.expand_dims(top_row_gap, axis=-1)
+        btm_row_gap = tf.subtract(row_gap, top_row_gap)
+        exp_btm_row_gap = tf.expand_dims(btm_row_gap, axis=-1)
+        pad_col_row = tf.concat([double_pad, exp_top_row_gap, exp_btm_row_gap, exp_left_col_gap, exp_right_col_gap], axis=-1)
+        reshaped_pad = tf.reshape(pad_col_row, pad_shape)
+        padded_target = tf.pad(reshape_sliced_target, reshaped_pad)
+        next_matrix_2 = tf.reshape(tf.add(current_matrix, padded_target), target_matrix_shape)
+        k_iter_next = tf.subtract(k_iter, const_one)
+        return k_iter_next, next_matrix_2
+    _, target_matrix = tf.while_loop(cond, body, [superdiagonal_max, base_matrix_casted])
+    return target_matrix
+
+
+@tf_op("MatrixDiagV3")
+class MatrixDiagV3:
+    @classmethod
+    def version_11(cls, ctx, node, **kwargs):
+        '''
+        input_tensors = [tf.TensorSpec(shape=None, dtype=ctx.get_dtype(input), name=input) for input in node.input]
+        concrete_func = tf.function(MatrixDiagV3Func, input_signature=tuple(input_tensors)).get_concrete_function()
+        print (type(concrete_func.graph))
+        input()
+        onnx_graph = tfonnx.process_tf_graph(concrete_func.graph, input_names=node.input, output_names=node.output)
+        onnx_graph = from_function(concrete_func,
+                                   input_names=node.input,
+                                   output_names=node.output)
+
+        print (type(concrete_func))
+        frozen_func = convert_variables_to_constants_v2(concrete_func, lower_control_flow=False)
+        graph_def = frozen_func.graph.as_graph_def(add_shapes=True)
+        with tf_session() as sess:
+            tf.import_graph_def(graph_def, name='')
+            onnx_graph = tfonnx.process_tf_graph(sess.graph, input_names=node.input, output_names=node.output)
+        '''
+        print ("MatrixDiagV3...")
+        input()
 
 @tf_op("BroadcastTo")
 class BroadcastTo:

@@ -139,7 +139,8 @@ def tflist_to_onnx(g, shape_override):
                     "Tout", "Tlabels", "Tindex", "element_shape", "Targmax", "Tperm", "Tcond",
                     "T_threshold", "element_dtype", "shape_type", "_lower_using_switch_merge",
                     "parallel_iterations", "_num_original_outputs", "output_types", "output_shapes",
-                    "key_dtype", "value_dtype", "Tin", "Tout", "capacity", "component_types", "shapes"]
+                    "key_dtype", "value_dtype", "Tin", "Tout", "capacity", "component_types", "shapes",
+                    "__inference_MatrixDiagV3Func_712"]
 
     node_list = g.get_operations()
     functions = {}

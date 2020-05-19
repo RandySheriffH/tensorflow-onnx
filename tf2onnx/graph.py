@@ -845,6 +845,9 @@ class Graph(object):
         dtype = self.get_dtype(src_name)
         self.set_dtype(dst_name, dtype)
 
+    def print_shape(self):
+        print (self._output_shapes)
+
     def get_shape(self, name):
         """Get shape for node."""
         utils.make_sure(isinstance(name, six.text_type), "get_shape name is invalid type: %s", name)
@@ -1067,7 +1070,8 @@ class Graph(object):
             shape = self.get_shape(name)
 
             utils.make_sure(dtype is not None, "missing output dtype for " + name)
-            utils.make_sure(shape is not None, "missing output shape for " + name)
+            #utils.make_sure(shape is not None, "missing output shape for " + name)
+            shape = [-1] if shape == None else shape
 
             v = utils.make_onnx_inputs_outputs(name, dtype, shape)
             tensor_value_infos.append(v)
