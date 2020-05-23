@@ -2107,13 +2107,41 @@ class MatrixDiagV3:
         abs_k_range = ctx.make_node("Abs", [k_range.output[0]])
         min_abs_k_range = ctx.make_node("ReduceMin", [abs_k_range.output[0]])
         diag_len = ctx.make_node("Add", [diag_width.output[0], min_abs_k_range.output[0]])
+        col_not_set = ctx.make_node("Equal", [col, const_neg_one.output[0]])
+        col_set = ctx.make_node("Not", [col_not_set.output[0]])
+        row_not_set = ctx.make_node("Equal", [row, const_neg_one.output[0]])
+        row_set = ctx.make_node("Not", [row_not_set.output[0]])
+        #max col
         max_col_graph = ctx.create_new_graph_with_same_config()
         max_col_graph.parent_graph = ctx
-        max_col = max_col_graph.make_node("Max", [diag_len.output[0], col])
+        #max_col = max_col_graph.make_node("Max", [diag_len.output[0], col])
+        max_col_sub_graph_1 = max_col_graph.create_new_graph_with_same_config()
+        max_col_sub_graph_1.parent_graph = max_col_graph
+        identity_diag_len_col = max_col_sub_graph_1.make_node("Identity", [diag_len.output[0]])
+        max_col_sub_graph_1.add_graph_output(identity_diag_len_col.output[0], ctx.get_dtype(col), [-1])
+        max_col_sub_graph_2 = max_col_graph.create_new_graph_with_same_config()
+        max_col_sub_graph_2.parent_graph = max_col_graph
+        mul_col = max_col_sub_graph_2.make_node("Mul", [const_one.output[0], col])
+        max_col_sub_graph_2.add_graph_output(mul_col.output[0], ctx.get_dtype(col), [-1])
+        max_col = max_col_graph.make_node("If", [col_not_set.output[0]])
+        max_col.set_body_graph_as_attr("then_branch", max_col_sub_graph_1)
+        max_col.set_body_graph_as_attr("else_branch", max_col_sub_graph_2)
         max_col_graph.add_graph_output(max_col.output[0], ctx.get_dtype(col), [-1])
+        #max row
         max_row_graph = ctx.create_new_graph_with_same_config()
         max_row_graph.parent_graph = ctx
-        max_row = max_row_graph.make_node("Max", [diag_len.output[0], row])
+        #max_row = max_row_graph.make_node("Max", [diag_len.output[0], row])
+        max_row_sub_graph_1 = max_row_graph.create_new_graph_with_same_config()
+        max_row_sub_graph_1.parent_graph = max_row_graph
+        identity_diag_len_row = max_row_sub_graph_1.make_node("Identity", [diag_len.output[0]])
+        max_row_sub_graph_1.add_graph_output(identity_diag_len_row.output[0], ctx.get_dtype(row), [-1])
+        max_row_sub_graph_2 = max_row_graph.create_new_graph_with_same_config()
+        max_row_sub_graph_2.parent_graph = max_row_graph
+        mul_row = max_row_sub_graph_2.make_node("Mul", [const_one.output[0], row])
+        max_row_sub_graph_2.add_graph_output(mul_row.output[0], ctx.get_dtype(row), [-1])
+        max_row = max_row_graph.make_node("If", [row_not_set.output[0]])
+        max_row.set_body_graph_as_attr("then_branch", max_row_sub_graph_1)
+        max_row.set_body_graph_as_attr("else_branch", max_row_sub_graph_2)
         max_row_graph.add_graph_output(max_row.output[0], ctx.get_dtype(row), [-1])
         raw_sub_max = ctx.make_node("Min", [const_zero.output[0], k_max.output[0]])
         sub_max = ctx.make_node("Abs", [raw_sub_max.output[0]])
@@ -2126,10 +2154,10 @@ class MatrixDiagV3:
         min_row_graph.parent_graph = ctx
         min_row = min_row_graph.make_node("Add", [diag_width.output[0], sub_max.output[0]])
         min_row_graph.add_graph_output(min_row.output[0], ctx.get_dtype(row), [-1])
-        col_not_set = ctx.make_node("Equal", [col, const_neg_one.output[0]])
-        col_set = ctx.make_node("Not", [col_not_set.output[0]])
-        row_not_set = ctx.make_node("Equal", [row, const_neg_one.output[0]])
-        row_set = ctx.make_node("Not", [row_not_set.output[0]])
+        # col_not_set = ctx.make_node("Equal", [col, const_neg_one.output[0]])
+        # col_set = ctx.make_node("Not", [col_not_set.output[0]])
+        # row_not_set = ctx.make_node("Equal", [row, const_neg_one.output[0]])
+        # row_set = ctx.make_node("Not", [row_not_set.output[0]])
         need_min_col = ctx.make_node("And", [col_not_set.output[0], row_set.output[0]])
         need_min_row = ctx.make_node("And", [row_not_set.output[0], col_set.output[0]])
         final_col = ctx.make_node("If", [need_min_col.output[0]])
@@ -2258,6 +2286,105 @@ class MatrixDiagV3:
         ctx.make_node("Identity", [main_loop.output[0]], name=node.name,
                                   outputs=node.output, shapes=shapes, dtypes=dtypes)
 
+@tf_op("MatrixSetDiagV3")
+class MatrixSetDiagV3:
+    @classmethod
+    def version_12(cls, ctx, node, **kwargs):
+        # MatrixSetDiagV3 by MatrixDiagPartV3 and MatrixDiagV3
+        x = node.input[0]
+        diag = node.input[1]
+        k = ctx.make_node("Cast", [node.input[2]], attr = {"to": TensorProto.INT64}).output[0]
+        align = node.get_attr_str("align")
+        expected_shape = [-1] * len(ctx.get_shape(x))
+        shapes = node.output_shapes
+        dtypes = node.output_dtypes
+        const_zero = ctx.make_const(utils.make_name('const_zero'), np.array([0]).astype(np.int64))
+        const_one = ctx.make_const(utils.make_name('const_one'), np.array([1]).astype(np.int64))
+        const_zero_cast = ctx.make_node("Cast", [const_zero.output[0]], attr = {"to": ctx.get_dtype(x)})
+        const_neg_one = ctx.make_const(utils.make_name('const_neg_one'), np.array([-1]).astype(np.int64))
+        const_neg_two = ctx.make_const(utils.make_name('const_neg_two'), np.array([-2]).astype(np.int64))
+        x_shape = ctx.make_node("Shape", [x])
+        x_rank = ctx.make_node("Shape", [x_shape.output[0]])
+        x_depth = ctx.make_node("Slice", [x_shape.output[0], const_neg_two.output[0], const_neg_one.output[0]])
+        x_width = ctx.make_node("Slice", [x_shape.output[0], const_neg_one.output[0], x_rank.output[0]])
+        k_max = ctx.make_node("ReduceMax", [k])
+        k_min = ctx.make_node("ReduceMin", [k])
+        k_top = ctx.make_node("Sub", [x_width.output[0], const_one.output[0]])
+        k_btm = ctx.make_node("Sub", [const_one.output[0], x_depth.output[0]])
+        padding = ctx.make_node("Cast", [const_zero.output[0]], attr = {"to": ctx.get_dtype(diag)})
+        identity_graph = ctx.create_new_graph_with_same_config()
+        identity_graph.parent_graph = ctx
+        identity_diag = identity_graph.make_node("Expand", [const_zero_cast.output[0], x_shape.output[0]])
+        identity_graph.add_graph_output(identity_diag.output[0], ctx.get_dtype(x), expected_shape)
+        #diag_top
+        create_top_graph = ctx.create_new_graph_with_same_config()
+        create_top_graph.parent_graph = ctx
+        k_top_min = create_top_graph.make_node("Add", [k_max.output[0], const_one.output[0]])
+        k_top_pair = create_top_graph.make_node("Concat", [k_top_min.output[0], k_top.output[0]], attr = {"axis": -1})
+        diag_top = create_top_graph.make_node("MatrixDiagPartV3", [x, k_top_pair.output[0], padding.output[0]], attr = {"align": align})
+        #create_top_graph.set_shape(diag_top.output[0], ctx.get_shape(x))
+        create_top_graph.set_dtype(diag_top.output[0], ctx.get_dtype(x))
+        x_top = create_top_graph.make_node("MatrixDiagV3", [diag_top.output[0], k_top_pair.output[0], \
+                                           x_depth.output[0], x_width.output[0], padding.output[0]], attr = {"align": align})
+        create_top_graph.add_graph_output(x_top.output[0], ctx.get_dtype(x), expected_shape)
+        MatrixDiagPartV2V3.version_11(create_top_graph, diag_top, **kwargs)
+        MatrixDiagV3.version_12(create_top_graph, x_top, **kwargs)
+        has_top = ctx.make_node("Greater", [k_top.output[0], k_max.output[0]])
+        diag_top = ctx.make_node("If", [has_top.output[0]])
+        diag_top.set_body_graph_as_attr("then_branch", create_top_graph)
+        diag_top.set_body_graph_as_attr("else_branch", identity_graph)
+        # ctx.remove_node(node.name)
+        # ctx.make_node("Identity", [diag_top.output[0]], name=node.name, outputs=node.output, shapes=shapes, dtypes=dtypes)
+        #diag_mid
+        diag_mid = ctx.make_node("MatrixDiagV3", [diag, k, x_depth.output[0], x_width.output[0], padding.output[0]],
+                                 attr = {"align": align})
+        MatrixDiagV3.version_12(ctx, diag_mid, **kwargs)
+        #diag_btm
+        create_btm_graph = ctx.create_new_graph_with_same_config()
+        create_btm_graph.parent_graph = ctx
+        k_btm_max = create_btm_graph.make_node("Sub", [k_min.output[0], const_one.output[0]])
+        k_btm_pair = create_btm_graph.make_node("Concat", [k_btm.output[0], k_btm_max.output[0]], attr = {"axis": -1})
+        diag_btm = create_btm_graph.make_node("MatrixDiagPartV3", [x, k_btm_pair.output[0], padding.output[0]], attr = {"align": align})
+        #create_btm_graph.set_shape(diag_btm.output[0], ctx.get_shape(x))
+        create_btm_graph.set_dtype(diag_btm.output[0], ctx.get_dtype(x))
+        x_btm = create_btm_graph.make_node("MatrixDiagV3", [diag_btm.output[0], k_btm_pair.output[0], \
+                                           x_depth.output[0], x_width.output[0], padding.output[0]], attr = {"align": align})
+        create_btm_graph.add_graph_output(x_btm.output[0], ctx.get_dtype(x), expected_shape)
+        MatrixDiagPartV2V3.version_11(create_btm_graph, diag_btm, **kwargs)
+        MatrixDiagV3.version_12(create_btm_graph, x_btm, **kwargs)
+        has_btm = ctx.make_node("Less", [k_btm.output[0], k_min.output[0]])
+        diag_btm = ctx.make_node("If", [has_btm.output[0]])
+        diag_btm.set_body_graph_as_attr("then_branch", create_btm_graph)
+        diag_btm.set_body_graph_as_attr("else_branch", identity_graph)
+        ctx.remove_node(node.name)
+        diag_sum_1 = ctx.make_node("Add", [diag_top.output[0], diag_mid.output[0]], name = utils.make_name("add_sum1"))
+        diag_sum_2 = ctx.make_node("Add", [diag_sum_1.output[0], diag_btm.output[0]],
+                                   name=node.name, outputs=node.output, shapes=shapes, dtypes=dtypes)
+
+    '''
+    def version_12(cls, ctx, node, **kwargs):
+        # MatrixSetDiagV3 by MatrixDiagPartV3 and MatrixDiagV3
+        x = node.input[0]
+        diag = node.input[1]
+        k = node.input[2]
+        align = node.get_attr_str("align")
+        const_zero = ctx.make_const(utils.make_name('const_zero'), np.array([0]).astype(np.int64))
+        const_neg_one = ctx.make_const(utils.make_name('const_neg_one'), np.array([-1]).astype(np.int64))
+        const_neg_two = ctx.make_const(utils.make_name('const_neg_two'), np.array([-2]).astype(np.int64))
+        x_shape = ctx.make_node("Shape", [x])
+        x_rank = ctx.make_node("Shape", [x_shape.output[0]])
+        x_depth = ctx.make_node("Slice", [x_shape.output[0], const_neg_two.output[0], const_neg_one.output[0]])
+        x_width = ctx.make_node("Slice", [x_shape.output[0], const_neg_one.output[0], x_rank.output[0]])
+        padding = ctx.make_node("Cast", [const_zero.output[0]], attr = {"to": ctx.get_dtype(diag)})
+        shapes = node.output_shapes
+        dtypes = node.output_dtypes
+        ctx.remove_node(node.name)
+        matrix_diag_v3 = ctx.make_node("MatrixDiagV3", [diag, k, x_depth.output[0], x_width.output[0], padding.output[0]],
+                                       attr = {"align": align}, name=node.name, outputs=node.output, shapes=shapes, dtypes=dtypes)
+        MatrixDiagV3.version_12(ctx, matrix_diag_v3, **kwargs)
+        #print ("MatrixSetDiagV3")
+        #input()
+    '''
 
 @tf_op("BroadcastTo")
 class BroadcastTo:

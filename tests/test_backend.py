@@ -197,7 +197,7 @@ class BackendTests(Tf2OnnxBackendTestBase):
     def test_expand_dims_more_unknown_rank(self):
         for i in [-1, 0, 1, -2]:
             self._test_expand_dims_more_unknown_rank(i)
-
+    '''
     @check_opset_min_version(9, "ConstantOfShape")
     def test_eye_non_const1(self):
         # tf.eye(num_rows), num_rows is not const here
@@ -240,7 +240,7 @@ class BackendTests(Tf2OnnxBackendTestBase):
                 return tf.identity(y, name=_TFOUTPUT), \
                        tf.identity(y1, name=_TFOUTPUT1)
             self._run_test_case(func, [_OUTPUT, _OUTPUT1], {_INPUT: x_val}, rtol=0)
-
+    '''
     @check_opset_min_version(7, "trig")
     def test_trig_ops(self):
         for op in [tf.sin, tf.cos, tf.tan, tf.asin, tf.acos, tf.atan]:
@@ -3210,7 +3210,7 @@ class BackendTests(Tf2OnnxBackendTestBase):
             return tf.math.less_equal(x, y, name=_TFOUTPUT), \
                    tf.math.greater_equal(x, y, name=_TFOUTPUT1)
         self._run_test_case(func, [_OUTPUT, _OUTPUT1], {_INPUT: x_val, _INPUT1: y_val})
-    '''
+
     @check_opset_min_version(12)
     def test_matrix_diag_v3_multi_dim(self):
         raw_diag = [[[1.0,   2.0,  3.0],
@@ -3257,6 +3257,21 @@ class BackendTests(Tf2OnnxBackendTestBase):
                                            padding_value=0.789, align='LEFT_RIGHT', name=_TFOUTPUT)
         self._run_test_case(func, [_OUTPUT], {_INPUT: diag_val, _INPUT1: k_val,
                                               _INPUT2: row_val, _INPUT3: col_val})
+    '''
+    @check_opset_min_version(12)
+    def test_matrix_set_diag_v3(self):
+        input_val = np.array([[[7, 7, 7, 7],
+                               [7, 7, 7, 7],
+                               [7, 7, 7, 7]],
+                              [[7, 7, 7, 7],
+                               [7, 7, 7, 7],
+                               [7, 7, 7, 7]]])
+        diag_val = np.array([[1, 2, 3],
+                             [4, 5, 6]])
+        k_val = np.array(0)
+        def func(input, diag, k):
+            return tf.raw_ops.MatrixSetDiagV3(input=input, diagonal=diag, k=k, align='RIGHT_LEFT', name=_TFOUTPUT)
+        self._run_test_case(func, [_OUTPUT], {_INPUT: input_val, _INPUT1: diag_val, _INPUT2: k_val})
 
 
 if __name__ == '__main__':
