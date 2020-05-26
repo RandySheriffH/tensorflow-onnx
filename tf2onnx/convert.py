@@ -14,6 +14,7 @@ from __future__ import unicode_literals
 import argparse
 import os
 import sys
+import cProfile
 
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
 
@@ -166,4 +167,5 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    #main()
+    cProfile.run("main()", "profiling_statistics")
