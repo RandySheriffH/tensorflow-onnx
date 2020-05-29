@@ -265,6 +265,9 @@ class CondRewriter:
             [merge_input_2],
             stop_at_switch
         )
+        print ("*********************** SWITCHES ************************")
+        for switch in switchs:
+            print ("*** switch:", switch.name)
         branch_type_1 = self._branch_type(merge_input_1, branch_nodes_1)
         branch_type_2 = self._branch_type(merge_input_2, branch_nodes_2)
         # all possible branch types: UU, UT, UF, TU, TF, FU, FT
@@ -287,6 +290,11 @@ class CondRewriter:
 
     def _branch_type(self, branch_output, nodes):
         """Infer the branch type (true, false or unknown)"""
+        print ("++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++")
+        for node in nodes:
+            if node.type == 'Switch':
+                print ("+++ Switch node:", node.name)
+        print ("processing branch")
         branch = BranchType.UNKNOWN
         # the branch is empty
         if not nodes:
@@ -301,14 +309,19 @@ class CondRewriter:
             for inp in node.input:
                 input_node = self.g.get_node_by_output(inp)
                 if self._is_switch(input_node):
+                    print ("++++++++++++++++++++++++++++++++++++++++++++++++++++")
+                    print ("switch node:", input_node.name)
+                    print ("current node:", node.name, "type:", node.op.op_type)
                     if inp == input_node.output[0]:
                         if branch == BranchType.TRUE:
                             raise ValueError("true and false graph intersect at {}".format(node.name))
                         branch = BranchType.FALSE
+                        print ("Set branch False")
                     else:
                         if branch == BranchType.FALSE:
                             raise ValueError("true and false graph intersect at {}".format(node.name))
                         branch = BranchType.TRUE
+                        print ("Set branch True")
         if branch == BranchType.UNKNOWN:
             logger.debug(
                 "branch only contains const node: [%s]",
