@@ -114,7 +114,6 @@ class CondRewriter:
             false_rank = len(false_shape)
             false_dtype = self.g.get_dtype(false_output)
             # just require rank is equal
-            '''
             if true_rank != false_rank:
                 raise RuntimeError(
                     "the rank of outputs {} and {} mismatch: {}, {}".format(
@@ -124,7 +123,6 @@ class CondRewriter:
                         false_rank
                     )
                 )
-            '''
             if true_dtype != false_dtype:
                 raise RuntimeError(
                     "the dtype of outputs {} and {} mismatch: {}, {}".format(
@@ -287,10 +285,6 @@ class CondRewriter:
             false_output = merge_input_1
         return true_branch_nodes, true_output, false_branch_nodes, false_output, switchs
 
-    def _reverse_cond(self, switch_node):
-        print ("reverse output for switch node:", switch_node.name)
-        self.g.insert_new_node_on_input(switch_node, "Not", switch_node.input[1])
-
     def _branch_type(self, branch_output, nodes):
         """Infer the branch type (true, false or unknown)"""
         branch = BranchType.UNKNOWN
@@ -304,20 +298,16 @@ class CondRewriter:
                     branch = BranchType.TRUE
             return branch
         for node in nodes:
-            for idx, inp in enumerate(node.input):
+            for inp in node.input:
                 input_node = self.g.get_node_by_output(inp)
                 if self._is_switch(input_node):
                     if inp == input_node.output[0]:
                         if branch == BranchType.TRUE:
-                            self._reverse_cond(input_node)
-                            node.input[idx] = input_node.output[1]
-                            continue
+                            raise ValueError("true and false graph intersect at {}".format(node.name))
                         branch = BranchType.FALSE
                     else:
                         if branch == BranchType.FALSE:
-                            self._reverse_cond(input_node)
-                            node.input[idx] = input_node.output[1]
-                            continue
+                            raise ValueError("true and false graph intersect at {}".format(node.name))
                         branch = BranchType.TRUE
         if branch == BranchType.UNKNOWN:
             logger.debug(
