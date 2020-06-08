@@ -251,6 +251,82 @@ class PassThroughOp:
         # scan has 1 less mandatory input and 4 extra attrs
         pass
 
+@tf_op("Merge")
+class Merge:
+    @classmethod
+    def version_8(cls, ctx, node, **kwargs):
+
+        nan = ctx.make_const(utils.make_name('nan'), np.array([np.nan]).astype(np.int64)).output[0]
+        minus_one = ctx.make_const(utils.make_name('minus_one'), np.array([-1]).astype(np.int64)).output[0]
+        reshaped = ctx.make_node('Reshape', [node.input[0], minus_one]).output[0]
+        prod = ctx.make_node('ReduceProd', [reshaped]).output[0]
+        casted = ctx.make_node('Cast', [prod], attr={'to': TensorProto.INT64}).output[0]
+        is_nan = ctx.make_node('Equal', [casted, nan]).output[0]
+        shapes = node.output_shapes
+        dtypes = node.output_dtypes
+
+        def leftvalue():
+            g = ctx.create_new_graph_with_same_config()
+            g.parent_graph = ctx
+            ret = g.make_node('Identity', [node.input[0]]).output[0]
+            zeo = g.make_const(utils.make_name(''), np.array([0]).astype(np.int32)).output[0]
+            g.add_graph_output(ret, dtypes[0], shapes[0])
+            g.add_graph_output(zeo, dtypes[1], shapes[1])
+            return g
+
+        def rightvalue():
+            g = ctx.create_new_graph_with_same_config()
+            g.parent_graph = ctx
+            ret = g.make_node('Identity', [node.input[1]]).output[0]
+            one = g.make_const(utils.make_name(''), np.array([1]).astype(np.int32)).output[0]
+            g.add_graph_output(ret, dtypes[0],  shapes[0])
+            g.add_graph_output(one, dtypes[1], shapes[1])
+            return g
+
+        ctx.remove_node(node.name)
+        ifnode = ctx.make_node('If', [is_nan], outputs = node.output,
+                               name = node.name, dtypes=dtypes, shapes=shapes)
+        ifnode.set_body_graph_as_attr("then_branch", rightvalue())
+        ifnode.set_body_graph_as_attr("else_branch", leftvalue())
+
+
+@tf_op("Switch")
+class Switch:
+    @classmethod
+    def version_8(cls, ctx, node, **kwargs):
+
+        input_value = node.input[0]
+        input_bool = node.input[1]
+        outputs = node.output
+        shapes = [[-1] if shape is None else shape for shape in node.output_shapes]
+        dtypes = node.output_dtypes
+        nan = ctx.make_const(utils.make_name('nan'), np.array([np.nan]).astype(np.float32)).output[0]
+        nan_casted = ctx.make_node('Cast', [nan], attr={'to': dtypes[0]}).output[0]
+
+        def falsegraph(value): # value is output 0
+            g = ctx.create_new_graph_with_same_config()
+            g.parent_graph = ctx
+            real_value = g.make_node('Identity', [value]).output[0]
+            nan_value = g.make_node('Mul', [nan_casted, real_value]).output[0]
+            g.add_graph_output(real_value, dtypes[0], shapes[0])
+            g.add_graph_output(nan_value, dtypes[1], shapes[1])
+            return g
+
+        def truegraph(value): # value is output 1
+            g = ctx.create_new_graph_with_same_config()
+            g.parent_graph = ctx
+            real_value = g.make_node('Identity', [value]).output[0]
+            nan_value = g.make_node('Mul', [nan_casted, real_value]).output[0]
+            g.add_graph_output(nan_value, dtypes[0], shapes[0])
+            g.add_graph_output(real_value, dtypes[1], shapes[1])
+            return g
+
+        ctx.remove_node(node.name)
+        ifnode = ctx.make_node('If', [input_bool], outputs = node.output, name = node.name,
+                               dtypes=dtypes, shapes=shapes)
+        ifnode.set_body_graph_as_attr("then_branch", truegraph(input_value))
+        ifnode.set_body_graph_as_attr("else_branch", falsegraph(input_value))
+
 
 @tf_op("Range")
 class Range:
