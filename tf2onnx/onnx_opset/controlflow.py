@@ -159,6 +159,8 @@ def create_loop_op(g, gather_input_ids, output_type, output_shape, trip_count_in
     loop_body = create_loop_body_graph(g, gather_input_ids, output_type, output_shape, trip_count_input_ids,
                                        rank, loop_node.name)
     loop_node.set_body_graph_as_attr("body", loop_body)
+    print ("loop:", loop_node.name)
+    input()
     return loop_node
 
 
@@ -265,11 +267,14 @@ class Merge:
         shapes = node.output_shapes
         dtypes = node.output_dtypes
 
+        print ("Merge outputs:", dtypes)
+        input()
+
         def leftvalue():
             g = ctx.create_new_graph_with_same_config()
             g.parent_graph = ctx
             ret = g.make_node('Identity', [node.input[0]]).output[0]
-            zeo = g.make_const(utils.make_name(''), np.array([0]).astype(np.int32)).output[0]
+            zeo = g.make_const(utils.make_name(''), np.array([0]).astype(np.int64)).output[0]
             g.add_graph_output(ret, dtypes[0], shapes[0])
             g.add_graph_output(zeo, dtypes[1], shapes[1])
             return g
@@ -278,7 +283,7 @@ class Merge:
             g = ctx.create_new_graph_with_same_config()
             g.parent_graph = ctx
             ret = g.make_node('Identity', [node.input[1]]).output[0]
-            one = g.make_const(utils.make_name(''), np.array([1]).astype(np.int32)).output[0]
+            one = g.make_const(utils.make_name(''), np.array([1]).astype(np.int64)).output[0]
             g.add_graph_output(ret, dtypes[0],  shapes[0])
             g.add_graph_output(one, dtypes[1], shapes[1])
             return g
@@ -302,6 +307,9 @@ class Switch:
         dtypes = node.output_dtypes
         nan = ctx.make_const(utils.make_name('nan'), np.array([np.nan]).astype(np.float32)).output[0]
         nan_casted = ctx.make_node('Cast', [nan], attr={'to': dtypes[0]}).output[0]
+
+        print ("Switch outputs:", dtypes)
+        input()
 
         def falsegraph(value): # value is output 0
             g = ctx.create_new_graph_with_same_config()
